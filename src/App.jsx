@@ -708,6 +708,18 @@ function TaskList() {
                       }}
                       className="bg-slate-700 text-slate-300 text-xs px-2 py-1 rounded border border-slate-600 focus:border-blue-500 focus:outline-none"
                     />
+                    <button
+                      onClick={async () => {
+                        await supabase
+                          .from('tasks')
+                          .update({ status: 'completed', completed_at: new Date().toISOString() })
+                          .eq('id', task.id)
+                        fetchTasks()
+                      }}
+                      className="ml-auto bg-green-800 text-green-300 px-2 py-1 rounded hover:bg-green-700"
+                    >
+                      ✓
+                    </button>
                   </div>
                 </li>
               ))}

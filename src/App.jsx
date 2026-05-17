@@ -380,6 +380,142 @@ function TaskDetail({ task, onBack, onUpdate }) {
   )
 }
 
+function WeeklyReview({ onExit }) {
+  const [tasks, setTasks] = useState([])
+  const [index, setIndex] = useState(0)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetchReviewTasks()
+  }, [])
+
+  const fetchReviewTasks = async () => {
+    const today = new Date().toISOString().split('T')[0]
+    const { data } = await supabase
+      .from('tasks')
+      .select('*, projects(name)')
+      .in('status', ['active', 'waiting_for'])
+      .lte('review_date', today)
+      .order('review_date')
+    setTasks(data || [])
+    setLoading(false)
+  }
+
+  const current = tasks[index]
+
+  const handleComplete = async () => {
+    await supabase
+      .from('tasks')
+      .update({ status: 'completed', completed_at: new Date().toISOString() })
+      .eq('id', current.id)
+    advance()
+  }
+
+  const handleBumpDate = async (days) => {
+    const d = new Date()
+    d.setDate(d.getDate() + days)
+    const newDate = d.toISOString().split('T')[0]
+    await supabase.from('tasks').update({ review_date: newDate }).eq('id', current.id)
+    advance()
+  }
+
+  const handleSetDate = async (date) => {
+    await supabase.from('tasks').update({ review_date: date || null }).eq('id', current.id)
+    advance()
+  }
+
+  const advance = () => {
+    if (index >= tasks.length - 1) {
+      setTasks((prev) => prev.filter((_, i) => i !== index))
+      setIndex(0)
+    } else {
+      setTasks((prev) => prev.filter((_, i) => i !== index))
+    }
+  }
+
+  if (loading) return <div className="min-h-screen bg-slate-900 text-white p-4"><p className="text-slate-400">Loading...</p></div>
+
+  if (tasks.length === 0) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4">
+        <p className="text-2xl mb-2">✓</p>
+        <p className="text-lg font-medium mb-1">All caught up</p>
+        <p className="text-slate-400 text-sm mb-6">No tasks due for review</p>
+        <button onClick={onExit} className="px-6 py-2 bg-blue-600 rounded hover:bg-blue-700">
+          Back to tasks
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-900 text-white">
+      <header className="flex items-center justify-between px-4 py-3 bg-slate-800 border-b border-slate-700">
+        <button onClick={onExit} className="text-blue-400 hover:text-blue-300">← Back</button>
+        <span className="text-sm text-slate-400">{index + 1} of {tasks.length} to review</span>
+      </header>
+      <div className="p-4 max-w-lg mx-auto">
+        <div className="bg-slate-800 rounded-lg border border-slate-700 p-4 space-y-3">
+          <h2 className="text-lg font-semibold">{current.title}</h2>
+          <div className="flex flex-wrap gap-2 text-xs">
+            {current.projects?.name && (
+              <span className="bg-slate-700 px-2 py-1 rounded">{current.projects.name}</span>
+            )}
+            {current.context && (
+              <span className="bg-slate-700 px-2 py-1 rounded">{current.context}</span>
+            )}
+            {current.queue && (
+              <span className="bg-slate-700 px-2 py-1 rounded">{current.queue}</span>
+            )}
+            {current.status === 'waiting_for' && (
+              <span className="bg-yellow-900 text-yellow-300 px-2 py-1 rounded">waiting</span>
+            )}
+          </div>
+          {current.review_date && (
+            <p className="text-sm text-slate-400">Review date: {current.review_date}</p>
+          )}
+          {current.notes && (
+            <div className="text-sm text-slate-300 bg-slate-900 rounded p-3 max-h-40 overflow-y-auto whitespace-pre-wrap">
+              {current.notes}
+            </div>
+          )}
+          {current.link && (
+            <a href={current.link} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-400 hover:text-blue-300 block">
+              🔗 Open link
+            </a>
+          )}
+        </div>
+
+        <div className="mt-4 space-y-3">
+          <p className="text-sm text-slate-400 font-medium">Review again in...</p>
+          <div className="grid grid-cols-4 gap-2">
+            <button onClick={() => handleBumpDate(1)} className="py-2 bg-slate-800 rounded border border-slate-700 text-sm hover:border-slate-500">1 day</button>
+            <button onClick={() => handleBumpDate(3)} className="py-2 bg-slate-800 rounded border border-slate-700 text-sm hover:border-slate-500">3 days</button>
+            <button onClick={() => handleBumpDate(7)} className="py-2 bg-slate-800 rounded border border-slate-700 text-sm hover:border-slate-500">1 week</button>
+            <button onClick={() => handleBumpDate(14)} className="py-2 bg-slate-800 rounded border border-slate-700 text-sm hover:border-slate-500">2 weeks</button>
+          </div>
+          <div className="flex gap-2">
+            <span className="text-sm text-slate-400 self-center">Or pick date:</span>
+            <input
+              type="date"
+              onChange={(e) => handleSetDate(e.target.value)}
+              className="flex-1 bg-slate-800 text-sm text-slate-300 px-3 py-2 rounded border border-slate-700 focus:border-blue-500 focus:outline-none"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700">
+            <button onClick={handleComplete} className="py-2 bg-green-700 rounded hover:bg-green-600 text-sm">
+              ✓ Complete
+            </button>
+            <button onClick={() => setIndex((i) => Math.min(i + 1, tasks.length - 1))} className="py-2 bg-slate-800 rounded border border-slate-700 text-sm hover:border-slate-500">
+              Skip →
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function TaskList() {
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
@@ -391,6 +527,7 @@ function TaskList() {
   const [allProjects, setAllProjects] = useState([])
   const [sortBy, setSortBy] = useState('review_date')
   const [showProjects, setShowProjects] = useState(false)
+  const [reviewMode, setReviewMode] = useState(false)
 
   useEffect(() => {
     fetchTasks()
@@ -435,6 +572,9 @@ function TaskList() {
   if (showProjects) {
     return <ProjectManager onClose={() => { setShowProjects(false); fetchTasks() }} />
   }
+  if (reviewMode) {
+    return <WeeklyReview onExit={() => { setReviewMode(false); fetchTasks() }} />
+  }
   if (selectedTask) {
     return (
       <TaskDetail
@@ -449,12 +589,20 @@ function TaskList() {
     <div className="min-h-screen bg-slate-900 text-white">
       <header className="flex items-center justify-between px-4 py-3 bg-slate-800 border-b border-slate-700">
         <h1 className="text-lg font-semibold">Tasks</h1>
-        <button
-          onClick={() => setShowProjects(true)}
-          className="text-sm text-slate-400 hover:text-white"
-        >
-          Projects
-        </button>
+        <div className="flex gap-3">
+          <button
+            onClick={() => setReviewMode(true)}
+            className="text-sm text-slate-400 hover:text-white"
+          >
+            Review
+          </button>
+          <button
+            onClick={() => setShowProjects(true)}
+            className="text-sm text-slate-400 hover:text-white"
+          >
+            Projects
+          </button>
+        </div>
         <button
           onClick={() => supabase.auth.signOut()}
           className="text-sm text-slate-400 hover:text-white"

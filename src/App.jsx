@@ -516,6 +516,206 @@ function WeeklyReview({ onExit }) {
   )
 }
 
+function parseCSVLine(line) {
+  const result = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') {
+        current += '"'
+        i++
+      } else if (ch === '"') {
+        inQuotes = false
+      } else {
+        current += ch
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true
+      } else if (ch === ',') {
+        result.push(current)
+        current = ''
+      } else {
+        current += ch
+      }
+    }
+  }
+  result.push(current)
+  return result
+}
+
+function ExportImport({ onClose }) {
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState(null)
+
+  const handleExport = async () => {
+    const { data: tasks } = await supabase
+      .from('tasks')
+      .select('*, projects(name)')
+      .order('status')
+      .order('review_date')
+
+    if (!tasks || tasks.length === 0) return
+
+    const headers = ['title', 'status', 'project', 'context', 'queue', 'review_date', 'due_date', 'link', 'notes', 'completed_at', 'created_at']
+    const rows = tasks.map((t) =>
+      [t.title, t.status, t.projects?.name || '', t.context || '', t.queue || '', t.review_date || '', t.due_date || '', t.link || '', t.notes || '', t.completed_at || '', t.created_at]
+        .map((v) => '"' + String(v).replace(/"/g, '""') + '"')
+        .join(',')
+    )
+    const csv = [headers.join(','), ...rows].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `tasks-${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleImport = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    setImporting(true)
+    setImportResult(null)
+
+    const text = await file.text()
+    const lines = text.split('\n').filter((l) => l.trim())
+    const headers = parseCSVLine(lines[0])
+
+    const titleIdx = headers.findIndex((h) => h.toLowerCase().trim() === 'title')
+    if (titleIdx === -1) {
+      setImportResult({ error: 'CSV must have a "title" column' })
+      setImporting(false)
+      return
+    }
+
+    const colIdx = (name) => headers.findIndex((h) => h.toLowerCase().trim() === name)
+
+    // Get existing tasks to check for duplicates
+    const { data: existing } = await supabase.from('tasks').select('title')
+    const existingTitles = new Set((existing || []).map((t) => t.title.toLowerCase().trim()))
+
+    // Get existing projects to map by name
+    const { data: projects } = await supabase.from('projects').select('id, name')
+    const projectMap = {}
+    ;(projects || []).forEach((p) => { projectMap[p.name.toLowerCase().trim()] = p.id })
+
+    let added = 0
+    let skipped = 0
+    let newProjects = 0
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = parseCSVLine(lines[i])
+      const title = cols[titleIdx]?.trim()
+      if (!title) continue
+
+      if (existingTitles.has(title.toLowerCase().trim())) {
+        skipped++
+        continue
+      }
+
+      // Resolve project
+      let projectId = null
+      const projIdx = colIdx('project')
+      if (projIdx !== -1 && cols[projIdx]?.trim()) {
+        const projName = cols[projIdx].trim()
+        const projKey = projName.toLowerCase().trim()
+        if (projectMap[projKey]) {
+          projectId = projectMap[projKey]
+        } else {
+          const { data: newProj } = await supabase
+            .from('projects')
+            .insert({ name: projName })
+            .select('id')
+            .single()
+          if (newProj) {
+            projectMap[projKey] = newProj.id
+            projectId = newProj.id
+            newProjects++
+          }
+        }
+      }
+
+      const getCol = (name) => {
+        const idx = colIdx(name)
+        return idx !== -1 ? cols[idx]?.trim() || null : null
+      }
+
+      const status = getCol('status') || 'active'
+      const context = getCol('context')
+      const queue = getCol('queue')
+      const reviewDate = getCol('review_date')
+      const dueDate = getCol('due_date')
+      const link = getCol('link')
+      const notes = getCol('notes')
+
+      await supabase.from('tasks').insert({
+        title,
+        project_id: projectId,
+        status: ['active', 'waiting_for', 'completed', 'someday'].includes(status) ? status : 'active',
+        context: ['home', 'work', 'errand', 'phone'].includes(context) ? context : null,
+        queue,
+        review_date: reviewDate || null,
+        due_date: dueDate || null,
+        link,
+        notes,
+      })
+      existingTitles.add(title.toLowerCase().trim())
+      added++
+    }
+
+    setImportResult({ added, skipped, newProjects })
+    setImporting(false)
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-900 text-white">
+      <header className="flex items-center justify-between px-4 py-3 bg-slate-800 border-b border-slate-700">
+        <h1 className="text-lg font-semibold">Export / Import</h1>
+        <button onClick={onClose} className="text-blue-400 hover:text-blue-300">Done</button>
+      </header>
+      <div className="p-4 max-w-lg mx-auto space-y-6">
+        <div className="bg-slate-800 rounded-lg border border-slate-700 p-4 space-y-3">
+          <h2 className="font-medium">Export</h2>
+          <p className="text-sm text-slate-400">Download all tasks as a CSV file.</p>
+          <button onClick={handleExport} className="w-full py-2 bg-blue-600 rounded hover:bg-blue-700">
+            Download CSV
+          </button>
+        </div>
+
+        <div className="bg-slate-800 rounded-lg border border-slate-700 p-4 space-y-3">
+          <h2 className="font-medium">Import</h2>
+          <p className="text-sm text-slate-400">
+            Import tasks from a CSV file. Tasks with matching titles will be skipped.
+            Required column: <span className="text-white">title</span>.
+            Optional: status, project, context, queue, review_date, due_date, link, notes.
+          </p>
+          <label className="block w-full py-2 bg-slate-700 rounded text-center cursor-pointer hover:bg-slate-600">
+            {importing ? 'Importing...' : 'Choose CSV file'}
+            <input type="file" accept=".csv" onChange={handleImport} className="hidden" disabled={importing} />
+          </label>
+          {importResult && (
+            <div className="text-sm p-3 rounded bg-slate-900">
+              {importResult.error ? (
+                <p className="text-red-400">{importResult.error}</p>
+              ) : (
+                <>
+                  <p className="text-green-400">Added {importResult.added} tasks</p>
+                  {importResult.skipped > 0 && <p className="text-yellow-400">Skipped {importResult.skipped} duplicates</p>}
+                  {importResult.newProjects > 0 && <p className="text-blue-400">Created {importResult.newProjects} new projects</p>}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function TaskList() {
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
@@ -528,6 +728,7 @@ function TaskList() {
   const [sortBy, setSortBy] = useState('review_date')
   const [showProjects, setShowProjects] = useState(false)
   const [reviewMode, setReviewMode] = useState(false)
+  const [showExportImport, setShowExportImport] = useState(false)
 
   useEffect(() => {
     fetchTasks()
@@ -575,6 +776,9 @@ function TaskList() {
   if (reviewMode) {
     return <WeeklyReview onExit={() => { setReviewMode(false); fetchTasks() }} />
   }
+  if (showExportImport) {
+    return <ExportImport onClose={() => { setShowExportImport(false); fetchTasks() }} />
+  }
   if (selectedTask) {
     return (
       <TaskDetail
@@ -601,6 +805,12 @@ function TaskList() {
             className="text-sm text-slate-400 hover:text-white"
           >
             Projects
+          </button>
+          <button
+            onClick={() => setShowExportImport(true)}
+            className="text-sm text-slate-400 hover:text-white"
+          >
+            CSV
           </button>
         </div>
         <button

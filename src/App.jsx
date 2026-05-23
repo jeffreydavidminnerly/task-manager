@@ -184,6 +184,7 @@ function TaskDetail({ task, onBack, onUpdate }) {
     link: task.link || '',
     project_id: task.project_id || '',
     notes: task.notes || '',
+    external_id: task.external_id || '',
   })
   const [saving, setSaving] = useState(false)
   const [projects, setProjects] = useState([])
@@ -212,6 +213,7 @@ function TaskDetail({ task, onBack, onUpdate }) {
       due_date: form.due_date || null,
       link: form.link || null,
       notes: form.notes || null,
+      external_id: form.external_id || null,
     }
     await supabase.from('tasks').update(updates).eq('id', task.id)
     setSaving(false)
@@ -559,9 +561,9 @@ function ExportImport({ onClose }) {
 
     if (!tasks || tasks.length === 0) return
 
-    const headers = ['title', 'status', 'project', 'context', 'queue', 'review_date', 'due_date', 'link', 'notes', 'completed_at', 'created_at']
+    const headers = ['title', 'status', 'project', 'context', 'queue', 'review_date', 'due_date', 'link', 'notes', 'completed_at', 'created_at', 'external_id']
     const rows = tasks.map((t) =>
-      [t.title, t.status, t.projects?.name || '', t.context || '', t.queue || '', t.review_date || '', t.due_date || '', t.link || '', t.notes || '', t.completed_at || '', t.created_at]
+      [t.title, t.status, t.projects?.name || '', t.context || '', t.queue || '', t.review_date || '', t.due_date || '', t.link || '', t.notes || '', t.completed_at || '', t.created_at, t.external_id || '']
         .map((v) => '"' + String(v).replace(/"/g, '""') + '"')
         .join(',')
     )
@@ -595,8 +597,12 @@ function ExportImport({ onClose }) {
     const colIdx = (name) => headers.findIndex((h) => h.toLowerCase().trim() === name)
 
     // Get existing tasks to check for duplicates
-    const { data: existing } = await supabase.from('tasks').select('title')
+    const { data: existing } = await supabase.from('tasks').select('id, title, external_id')
     const existingTitles = new Set((existing || []).map((t) => t.title.toLowerCase().trim()))
+    const existingByExtId = {}
+    ;(existing || []).forEach((t) => {
+      if (t.external_id) existingByExtId[t.external_id.toLowerCase().trim()] = t.id
+    })
 
     // Get existing projects to map by name
     const { data: projects } = await supabase.from('projects').select('id, name')
@@ -605,6 +611,7 @@ function ExportImport({ onClose }) {
 
     let added = 0
     let skipped = 0
+    let updated = 0
     let newProjects = 0
 
     for (let i = 1; i < lines.length; i++) {
@@ -612,10 +619,12 @@ function ExportImport({ onClose }) {
       const title = cols[titleIdx]?.trim()
       if (!title) continue
 
-      if (existingTitles.has(title.toLowerCase().trim())) {
-        skipped++
-        continue
+      const getCol = (name) => {
+        const idx = colIdx(name)
+        return idx !== -1 ? cols[idx]?.trim() || null : null
       }
+
+      const extId = getCol('external_id')
 
       // Resolve project
       let projectId = null
@@ -639,11 +648,6 @@ function ExportImport({ onClose }) {
         }
       }
 
-      const getCol = (name) => {
-        const idx = colIdx(name)
-        return idx !== -1 ? cols[idx]?.trim() || null : null
-      }
-
       const status = getCol('status') || 'active'
       const context = getCol('context')
       const queue = getCol('queue')
@@ -652,7 +656,7 @@ function ExportImport({ onClose }) {
       const link = getCol('link')
       const notes = getCol('notes')
 
-      await supabase.from('tasks').insert({
+      const taskData = {
         title,
         project_id: projectId,
         status: ['active', 'waiting_for', 'completed', 'someday'].includes(status) ? status : 'active',
@@ -662,12 +666,26 @@ function ExportImport({ onClose }) {
         due_date: dueDate || null,
         link,
         notes,
-      })
-      existingTitles.add(title.toLowerCase().trim())
-      added++
+        external_id: extId,
+      }
+
+      // Match by external_id first, then title
+      const matchedId = extId && existingByExtId[extId.toLowerCase().trim()]
+
+      if (matchedId) {
+        await supabase.from('tasks').update(taskData).eq('id', matchedId)
+        updated++
+      } else if (existingTitles.has(title.toLowerCase().trim())) {
+        skipped++
+      } else {
+        await supabase.from('tasks').insert(taskData)
+        existingTitles.add(title.toLowerCase().trim())
+        if (extId) existingByExtId[extId.toLowerCase().trim()] = true
+        added++
+      }
     }
 
-    setImportResult({ added, skipped, newProjects })
+    setImportResult({ added, skipped, updated, newProjects })
     setImporting(false)
   }
 
@@ -689,9 +707,10 @@ function ExportImport({ onClose }) {
         <div className="bg-slate-800 rounded-lg border border-slate-700 p-4 space-y-3">
           <h2 className="font-medium">Import</h2>
           <p className="text-sm text-slate-400">
-            Import tasks from a CSV file. Tasks with matching titles will be skipped.
+            Import tasks from a CSV file. Matches by external_id first, then title.
+            Matched tasks are updated; unmatched titles are added as new.
             Required column: <span className="text-white">title</span>.
-            Optional: status, project, context, queue, review_date, due_date, link, notes.
+            Optional: status, project, context, queue, review_date, due_date, link, notes, external_id.
           </p>
           <label className="block w-full py-2 bg-slate-700 rounded text-center cursor-pointer hover:bg-slate-600">
             {importing ? 'Importing...' : 'Choose CSV file'}
@@ -704,6 +723,7 @@ function ExportImport({ onClose }) {
               ) : (
                 <>
                   <p className="text-green-400">Added {importResult.added} tasks</p>
+                  {importResult.updated > 0 && <p className="text-blue-300">Updated {importResult.updated} tasks (matched by external ID)</p>}
                   {importResult.skipped > 0 && <p className="text-yellow-400">Skipped {importResult.skipped} duplicates</p>}
                   {importResult.newProjects > 0 && <p className="text-blue-400">Created {importResult.newProjects} new projects</p>}
                 </>
@@ -900,6 +920,7 @@ function TaskList() {
                     <div className="flex flex-wrap gap-2 mt-1 text-xs text-slate-400">
                       {task.context && <span className="bg-slate-700 px-2 py-0.5 rounded">{task.context}</span>}
                       {task.queue && <span className="bg-slate-700 px-2 py-0.5 rounded">{task.queue}</span>}
+                      {task.external_id && <span className="bg-slate-700 px-2 py-0.5 rounded">{task.external_id}</span>}
                       {task.status === 'waiting_for' && (
                         <span className="bg-yellow-900 text-yellow-300 px-2 py-0.5 rounded">waiting</span>
                       )}

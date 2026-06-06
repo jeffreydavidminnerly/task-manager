@@ -920,7 +920,21 @@ function TaskList() {
                     <div className="flex flex-wrap gap-2 mt-1 text-xs text-slate-400">
                       {task.context && <span className="bg-slate-700 px-2 py-0.5 rounded">{task.context}</span>}
                       {task.queue && <span className="bg-slate-700 px-2 py-0.5 rounded">{task.queue}</span>}
-                      {task.external_id && <span className="bg-slate-700 px-2 py-0.5 rounded">{task.external_id}</span>}
+                      {task.external_id && (
+                        task.link ? (
+                          <a
+                            href={task.link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="bg-slate-700 px-2 py-0.5 rounded hover:bg-slate-600 hover:text-white transition-colors"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {task.external_id}
+                          </a>
+                        ) : (
+                          <span className="bg-slate-700 px-2 py-0.5 rounded">{task.external_id}</span>
+                        )
+                      )}
                       {task.status === 'waiting_for' && (
                         <span className="bg-yellow-900 text-yellow-300 px-2 py-0.5 rounded">waiting</span>
                       )}
